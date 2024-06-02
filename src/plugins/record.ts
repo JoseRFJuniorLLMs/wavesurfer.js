@@ -16,6 +16,8 @@ export type RecordPluginOptions = {
   scrollingWaveform?: boolean
   /** The duration of the scrolling waveform window, defaults to 5 seconds */
   scrollingWaveformWindow?: number
+  /** The color of the waveform, optional */
+  waveformColor?: string
 }
 
 export type RecordPluginDeviceOptions = {
@@ -80,6 +82,7 @@ class RecordPlugin extends BasePlugin<RecordPluginEvents, RecordPluginOptions> {
     return new RecordPlugin(options || {})
   }
 
+  /** Render the microphone stream and draw the waveform */
   public renderMicStream(stream: MediaStream): MicStream {
     const audioContext = new AudioContext()
     const source = audioContext.createMediaStreamSource(stream)
@@ -103,7 +106,7 @@ class RecordPlugin extends BasePlugin<RecordPluginEvents, RecordPluginOptions> {
 
       if (this.options.scrollingWaveform) {
         const newLength = Math.min(windowSize, this.dataWindow ? this.dataWindow.length + bufferLength : bufferLength)
-        const tempArray = new Float32Array(windowSize) // Always make it the size of the window, filling with zeros by default
+        const tempArray = new Float32Array(windowSize)
 
         if (this.dataWindow) {
           const startIdx = Math.max(0, windowSize - this.dataWindow.length)
@@ -126,6 +129,12 @@ class RecordPlugin extends BasePlugin<RecordPluginEvents, RecordPluginOptions> {
         this.wavesurfer.options.cursorWidth = 0
         this.wavesurfer.options.interact = false
         this.wavesurfer.load('', [this.dataWindow], duration)
+        if (this.options.waveformColor) {
+          this.wavesurfer.setWaveColor(this.options.waveformColor)
+        } else {
+          const freqColor = this.frequencyToColor(this.getDominantFrequency(analyser))
+          this.wavesurfer.setWaveColor(freqColor)
+        }
       }
 
       animationId = requestAnimationFrame(drawWaveform)
@@ -147,6 +156,31 @@ class RecordPlugin extends BasePlugin<RecordPluginEvents, RecordPluginOptions> {
     }
   }
 
+  /** Get the dominant frequency from the analyser node */
+  private getDominantFrequency(analyser: AnalyserNode): number {
+    const dataArray = new Float32Array(analyser.fftSize)
+    analyser.getFloatFrequencyData(dataArray)
+    let maxIndex = 0
+    for (let i = 1; i < dataArray.length; i++) {
+      if (dataArray[i] > dataArray[maxIndex]) {
+        maxIndex = i
+      }
+    }
+    const nyquist = analyser.context.sampleRate / 2
+    return (maxIndex / dataArray.length) * nyquist
+  }
+
+  /** Map frequency to color based on musical notes */
+  private frequencyToColor(frequency: number): string {
+    if (frequency < 261.63) return 'red'    // C (Do)
+    if (frequency < 293.66) return 'orange' // D (Re)
+    if (frequency < 329.63) return 'yellow' // E (Mi)
+    if (frequency < 349.23) return 'green'  // F (Fa)
+    if (frequency < 392.00) return 'blue'   // G (Sol)
+    if (frequency < 440.00) return 'indigo' // A (La)
+    return 'violet'                         // B (Si) and above
+  }
+
   /** Request access to the microphone and start monitoring incoming audio */
   public async startMic(options?: RecordPluginDeviceOptions): Promise<MediaStream> {
     let stream: MediaStream
@@ -164,6 +198,12 @@ class RecordPlugin extends BasePlugin<RecordPluginEvents, RecordPluginOptions> {
     this.stream = stream
 
     return stream
+  }
+
+  /** Request access to the microphone and start monitoring incoming audio without recording */
+  public async startWaveformOnly(options?: RecordPluginDeviceOptions): Promise<void> {
+    const stream = await this.startMic(options)
+    this.renderMicStream(stream)
   }
 
   /** Stop monitoring incoming audio */
